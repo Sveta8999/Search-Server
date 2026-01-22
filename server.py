@@ -4,8 +4,49 @@ Search Server - бесплатный поиск через DuckDuckGo
 """
 
 import asyncio
+import aiohttp
 from aiohttp import web
-from duckduckgo_search import DDGS
+import urllib.parse
+import re
+
+async def fetch_ddg_results(query, max_results=5):
+    """Получает результаты поиска через DuckDuckGo HTML"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            html = await response.text()
+    
+    # Парсим результаты
+    results = []
+    
+    # Ищем блоки результатов
+    pattern = r'<a rel="nofollow" class="result__a" href="([^"]+)">(.+?)</a>.*?<a class="result__snippet"[^>]*>(.+?)</a>'
+    matches = re.findall(pattern, html, re.DOTALL)
+    
+    for match in matches[:max_results]:
+        url_encoded = match[0]
+        # Декодируем URL из DuckDuckGo redirect
+        if "uddg=" in url_encoded:
+            url_match = re.search(r'uddg=([^&]+)', url_encoded)
+            if url_match:
+                url_encoded = urllib.parse.unquote(url_match.group(1))
+        
+        title = re.sub(r'<[^>]+>', '', match[1]).strip()
+        body = re.sub(r'<[^>]+>', '', match[2]).strip()
+        
+        results.append({
+            "title": title,
+            "body": body,
+            "url": url_encoded
+        })
+    
+    return results
 
 async def search(request):
     """Поиск в интернете через DuckDuckGo"""
@@ -20,23 +61,13 @@ async def search(request):
         print(f"🔍 Поиск: '{query}'")
         
         # Выполняем поиск
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
+        results = await fetch_ddg_results(query, max_results)
         
-        # Форматируем результаты
-        formatted = []
-        for r in results:
-            formatted.append({
-                "title": r.get("title", ""),
-                "body": r.get("body", ""),
-                "url": r.get("href", "")
-            })
-        
-        print(f"✅ Найдено {len(formatted)} результатов")
+        print(f"✅ Найдено {len(results)} результатов")
         
         return web.json_response({
             "query": query,
-            "results": formatted
+            "results": results
         })
         
     except Exception as e:
@@ -55,24 +86,14 @@ async def news(request):
         
         print(f"📰 Новости: '{query}'")
         
-        with DDGS() as ddgs:
-            results = list(ddgs.news(query, max_results=max_results))
+        # Добавляем "news" к запросу
+        results = await fetch_ddg_results(f"{query} news", max_results)
         
-        formatted = []
-        for r in results:
-            formatted.append({
-                "title": r.get("title", ""),
-                "body": r.get("body", ""),
-                "url": r.get("url", ""),
-                "date": r.get("date", ""),
-                "source": r.get("source", "")
-            })
-        
-        print(f"✅ Найдено {len(formatted)} новостей")
+        print(f"✅ Найдено {len(results)} новостей")
         
         return web.json_response({
             "query": query,
-            "results": formatted
+            "results": results
         })
         
     except Exception as e:
